@@ -132,15 +132,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_currUser`);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return null;
+    // 1. Session storage has active authenticated session for the current browser session/tab
+    try {
+      const sessionSaved = sessionStorage.getItem(`${STORAGE_KEY}_currUser`);
+      if (sessionSaved) {
+        return JSON.parse(sessionSaved);
       }
+    } catch (e) {
+      // ignore
     }
-    return null; // Starts logged out for real login & role redirection flow
+
+    // Unauthenticated visitor starts with null (displaying login page first on any shared link)
+    // Clear any stale persistent storage user to prevent unintended auto-login on shared URLs
+    try {
+      localStorage.removeItem(`${STORAGE_KEY}_currUser`);
+    } catch (e) {
+      // ignore
+    }
+    return null;
   });
 
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
@@ -200,9 +209,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   useEffect(() => {
     if (currentUser) {
-      localStorage.setItem(`${STORAGE_KEY}_currUser`, JSON.stringify(currentUser));
+      try {
+        sessionStorage.setItem(`${STORAGE_KEY}_currUser`, JSON.stringify(currentUser));
+        localStorage.setItem(`${STORAGE_KEY}_currUser`, JSON.stringify(currentUser));
+      } catch (e) {
+        // ignore
+      }
     } else {
-      localStorage.removeItem(`${STORAGE_KEY}_currUser`);
+      try {
+        sessionStorage.removeItem(`${STORAGE_KEY}_currUser`);
+        localStorage.removeItem(`${STORAGE_KEY}_currUser`);
+      } catch (e) {
+        // ignore
+      }
     }
   }, [currentUser]);
 
@@ -333,12 +352,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (validRoles.includes(requestedRoleOrView as UserRole)) {
         const targetRole = requestedRoleOrView as UserRole;
         if (!currentUser) {
-          setBannerAlert({
-            title: 'Authentication Required',
-            message: `Please sign in to access the ${targetRole.replace('_', ' ')} portal.`,
-            type: 'warning',
-          });
-          window.location.hash = '#/';
+          // Unauthenticated: do not redirect away to #/, leave for LoginPage
           return;
         }
 
@@ -349,7 +363,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             message: `As a ${currentUser.role.replace('_', ' ')}, you are strictly prohibited from accessing ${targetRole.replace('_', ' ')} pages. Redirected to your dashboard.`,
             type: 'warning',
           });
-          window.location.hash = `#/${currentUser.role}/dashboard`;
+          // App.tsx renders the 403 route protection view and safely redirects
           setActiveView('dashboard');
           return;
         }
@@ -389,56 +403,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, error: 'Please enter your password.' };
     }
 
-    if (targetRole) {
-      // 1. Verify if an account exists for this specific role
-      const userForRole = users.find(u => u.email.toLowerCase() === cleanEmail && u.role === targetRole);
-      if (!userForRole) {
-        // Check if this email is registered under another role
-        const otherRoleUser = users.find(u => u.email.toLowerCase() === cleanEmail);
-        if (otherRoleUser) {
-          return {
-            success: false,
-            error: `This email is registered as a ${formatRoleTitle(otherRoleUser.role)}. Please sign in through the ${formatRoleTitle(otherRoleUser.role)} portal, or create an account for ${formatRoleTitle(targetRole)}.`,
-          };
-        }
-        return {
-          success: false,
-          error: `Invalid email or password. No ${formatRoleTitle(targetRole)} account found with this email.`,
-        };
-      }
-
-      // 2. Verify password match
-      const validPassword = userForRole.password || 'password123';
-      if (password !== validPassword) {
-        return { success: false, error: 'Invalid email or password.' };
-      }
-
-      // 3. Successful authentication
-      setCurrentUser(userForRole);
-      setActiveView('dashboard');
-      window.location.hash = `#/${userForRole.role}/dashboard`;
-      addNotification({
-        recipientId: userForRole.id,
-        roleTarget: userForRole.role,
-        title: 'Portal Access Authenticated',
-        message: `Signed in as ${userForRole.name} (${formatRoleTitle(userForRole.role)}). Access granted to your portal.`,
-        type: 'alert',
-      });
-      return { success: true, user: userForRole };
-    }
-
-    // General fallback if targetRole not passed
+    // Lookup user by registered email
     const user = users.find(u => u.email.toLowerCase() === cleanEmail);
     if (!user) {
-      return { success: false, error: 'Invalid email or password. No account found with this email.' };
+      return { success: false, error: 'Invalid email or password. No account registered with this email.' };
     }
+
+    // Verify password
     const validPassword = user.password || 'password123';
     if (password !== validPassword) {
       return { success: false, error: 'Invalid email or password.' };
     }
+
+    // Authenticated successfully: assign session and route to user's assigned role dashboard
+    try {
+      sessionStorage.setItem(`${STORAGE_KEY}_currUser`, JSON.stringify(user));
+      localStorage.setItem(`${STORAGE_KEY}_currUser`, JSON.stringify(user));
+    } catch (e) {
+      // ignore
+    }
     setCurrentUser(user);
     setActiveView('dashboard');
     window.location.hash = `#/${user.role}/dashboard`;
+
+    addNotification({
+      recipientId: user.id,
+      roleTarget: user.role,
+      title: 'Portal Access Authenticated',
+      message: `Signed in as ${user.name} (${formatRoleTitle(user.role)}). Access granted to your portal.`,
+      type: 'alert',
+    });
+
     return { success: true, user };
   };
 
@@ -446,7 +441,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCurrentUser(null);
     setActiveView('dashboard');
     localStorage.removeItem(`${STORAGE_KEY}_currUser`);
-    window.location.hash = '#/';
+    sessionStorage.removeItem(`${STORAGE_KEY}_currUser`);
+    window.location.hash = '#/login';
   };
 
   const registerUser = (data: Partial<User>) => {
