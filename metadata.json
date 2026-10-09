@@ -1,0 +1,6 @@
+{
+  "name": "LokWorks: Micro-Gig & Local Services Marketplace",
+  "description": "Interactive dual marketplace connecting Gig Hosts with Gig Partners and Clients with skilled Service Partners, featuring simulated escrow, GPS check-in, AI moderation, and real-time monitoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
