@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/common/Navbar';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
-import { AuthModal } from './components/auth/AuthModal';
+import { LoginPage } from './components/auth/LoginPage';
 import { LandingPage } from './components/auth/LandingPage';
 import { GigPartnerDashboard } from './components/gigPartner/GigPartnerDashboard';
 import { GigHostDashboard } from './components/gigHost/GigHostDashboard';
@@ -11,12 +11,15 @@ import { ServicePartnerDashboard } from './components/servicePartner/ServicePart
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { AIMatchingAssistant } from './components/ai/AIMatchingAssistant';
 import { UserRole } from './types';
-import { ShieldAlert, AlertTriangle, ArrowRight, Lock } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, ArrowRight, ArrowLeft } from 'lucide-react';
 
-function parseTargetRoleFromHash(hash: string): UserRole | null {
-  const clean = hash.replace(/^#\/?/, '').trim();
-  if (!clean) return null;
-  const segment = clean.split('/')[0];
+function parseTargetRole(): UserRole | null {
+  // Check hash first (e.g. #/gig_host/dashboard)
+  const hash = window.location.hash.replace(/^#\/?/, '').trim();
+  const path = window.location.pathname.replace(/^\//, '').trim();
+  const raw = hash || path;
+  if (!raw) return null;
+  const segment = raw.split('/')[0];
   const validRoles: UserRole[] = ['gig_partner', 'gig_host', 'client', 'service_partner', 'admin'];
   if (validRoles.includes(segment as UserRole)) {
     return segment as UserRole;
@@ -28,6 +31,8 @@ function parseTargetRoleFromHash(hash: string): UserRole | null {
 function AppContent() {
   const { currentUser, isAIChatOpen, setIsAIChatOpen, bannerAlert, clearBannerAlert, logout } = useApp();
   const [currentHash, setCurrentHash] = useState(() => window.location.hash);
+  const [showLandingOverview, setShowLandingOverview] = useState(false);
+  const [targetRoleBeforeAuth] = useState<UserRole | null>(() => parseTargetRole());
 
   useEffect(() => {
     const handleHash = () => {
@@ -37,37 +42,79 @@ function AppContent() {
     return () => window.removeEventListener('hashchange', handleHash);
   }, []);
 
-  const requestedRole = parseTargetRoleFromHash(currentHash);
+  const activeRoleFromUrl = parseTargetRole();
+
+  // For unauthenticated visitors: redirect browser URL to #/login while preserving the requested role notice
+  useEffect(() => {
+    if (!currentUser) {
+      if (window.location.pathname !== '/' && window.location.pathname !== '') {
+        window.history.replaceState(null, '', '/#/login' + window.location.search);
+      } else if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login';
+      }
+    }
+  }, [currentUser]);
 
   // Auto-redirect unauthorized attempts back to user's dashboard after notice
   useEffect(() => {
-    if (currentUser && requestedRole && requestedRole !== currentUser.role) {
+    if (currentUser && activeRoleFromUrl && activeRoleFromUrl !== currentUser.role) {
       const timer = setTimeout(() => {
         window.location.hash = `#/${currentUser.role}/dashboard`;
       }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [currentUser, requestedRole]);
+  }, [currentUser, activeRoleFromUrl]);
 
-  const [authConfig, setAuthConfig] = useState<{
-    isOpen: boolean;
-    initialTab?: 'login' | 'register';
-    initialRole?: UserRole;
-  }>({
-    isOpen: false,
-    initialTab: 'login',
-  });
+  // If authenticated user visits #/login, #/, or blank hash, keep them on their role's dashboard
+  useEffect(() => {
+    if (currentUser) {
+      const clean = currentHash.replace(/^#\/?/, '').trim();
+      if (!clean || clean === 'login') {
+        window.location.hash = `#/${currentUser.role}/dashboard`;
+      }
+    }
+  }, [currentUser, currentHash]);
 
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
-  const handleOpenAuth = (tab: 'login' | 'register' = 'login', role?: UserRole) => {
-    setAuthConfig({
-      isOpen: true,
-      initialTab: tab,
-      initialRole: role,
-    });
-  };
+  // UNAUTHENTICATED FLOW: Always display login page first regardless of requested URL
+  if (!currentUser) {
+    if (showLandingOverview) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900">
+          <div className="bg-indigo-950 text-white px-4 py-2.5 text-xs flex items-center justify-between sticky top-0 z-50 shadow-md">
+            <div className="max-w-7xl mx-auto w-full flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="font-bold bg-indigo-800 text-indigo-200 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">
+                  Platform Guide
+                </span>
+                <span className="text-slate-300 hidden sm:inline text-xs">
+                  Reviewing LokWorks ecosystem overview & marketplace roles
+                </span>
+              </div>
+              <button
+                onClick={() => setShowLandingOverview(false)}
+                className="px-3.5 py-1.5 bg-white text-indigo-950 font-bold rounded-lg hover:bg-indigo-50 transition-colors flex items-center gap-1.5 shadow-xs"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Return to Sign In</span>
+              </button>
+            </div>
+          </div>
+          <LandingPage onOpenAuth={() => setShowLandingOverview(false)} />
+        </div>
+      );
+    }
 
+    return (
+      <LoginPage
+        requestedRole={targetRoleBeforeAuth}
+        onOpenOverview={() => setShowLandingOverview(true)}
+      />
+    );
+  }
+
+  // AUTHENTICATED FLOW: Role-based dashboard with strict access control
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900 selection:bg-indigo-100 selection:text-indigo-900">
       
@@ -100,45 +147,13 @@ function AppContent() {
       <div className="sticky top-0 z-40 shadow-xs">
         <Navbar
           onOpenNotifications={() => setIsNotificationsOpen(true)}
-          onOpenAuth={() => handleOpenAuth('login')}
+          onOpenAuth={() => {}}
         />
       </div>
 
       {/* Main Role-Specific Viewport with Strict Route & Access Protection */}
       <main className="flex-1">
-        {!currentUser ? (
-          requestedRole ? (
-            <div className="max-w-md mx-auto my-20 p-8 bg-white border border-slate-200 rounded-3xl shadow-xl text-center space-y-5 animate-in fade-in duration-200">
-              <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-                <Lock className="w-7 h-7" />
-              </div>
-              <h2 className="text-xl font-bold text-slate-900">
-                Authentication Required
-              </h2>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                You must sign in to an authorized <strong className="text-slate-900 capitalize">{requestedRole.replace('_', ' ')}</strong> account to access this portal.
-              </p>
-              <div className="pt-2 flex flex-col gap-2">
-                <button
-                  onClick={() => handleOpenAuth('login', requestedRole)}
-                  className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl transition-colors shadow-sm"
-                >
-                  Sign In as {requestedRole.replace('_', ' ')}
-                </button>
-                <button
-                  onClick={() => {
-                    window.location.hash = '#/';
-                  }}
-                  className="w-full py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors"
-                >
-                  Return to Home Overview
-                </button>
-              </div>
-            </div>
-          ) : (
-            <LandingPage onOpenAuth={(mode, role) => handleOpenAuth(mode, role)} />
-          )
-        ) : requestedRole && requestedRole !== currentUser.role ? (
+        {activeRoleFromUrl && activeRoleFromUrl !== currentUser.role ? (
           /* STRICT ACCESS CONTROL BLOCK: User attempted to access another role's route */
           <div className="max-w-2xl mx-auto my-16 p-8 bg-white border-2 border-rose-300 rounded-3xl shadow-xl text-center space-y-5 animate-in fade-in duration-200">
             <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
@@ -148,10 +163,10 @@ function AppContent() {
               403 Forbidden • Route Protected
             </div>
             <h2 className="text-2xl font-bold text-slate-900">
-              Access Denied to {requestedRole.replace('_', ' ').toUpperCase()} Portal
+              Access Denied to {activeRoleFromUrl.replace('_', ' ').toUpperCase()} Portal
             </h2>
             <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
-              You are currently authenticated as a <strong className="text-slate-900 capitalize font-bold">{currentUser.role.replace('_', ' ')}</strong>. You are strictly prohibited from accessing <strong className="text-rose-600 capitalize font-bold">{requestedRole.replace('_', ' ')}</strong> routes.
+              You are currently authenticated as a <strong className="text-slate-900 capitalize font-bold">{currentUser.role.replace('_', ' ')}</strong>. You are strictly prohibited from accessing <strong className="text-rose-600 capitalize font-bold">{activeRoleFromUrl.replace('_', ' ')}</strong> routes.
             </p>
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-600 text-left max-w-md mx-auto space-y-1.5 font-mono">
               <div className="flex justify-between">
@@ -160,7 +175,7 @@ function AppContent() {
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Attempted Route:</span>
-                <span className="font-semibold text-rose-600">{currentHash}</span>
+                <span className="font-semibold text-rose-600">{currentHash || window.location.pathname}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Access Policy:</span>
@@ -199,17 +214,14 @@ function AppContent() {
         ) : currentUser.role === 'admin' ? (
           <AdminDashboard />
         ) : (
-          <LandingPage onOpenAuth={(mode, role) => handleOpenAuth(mode, role)} />
+          <LoginPage
+            requestedRole={targetRoleBeforeAuth}
+            onOpenOverview={() => setShowLandingOverview(true)}
+          />
         )}
       </main>
 
       {/* Modals & Drawers */}
-      <AuthModal
-        isOpen={authConfig.isOpen}
-        onClose={() => setAuthConfig(prev => ({ ...prev, isOpen: false }))}
-        initialTab={authConfig.initialTab}
-        initialRole={authConfig.initialRole}
-      />
       <NotificationDrawer
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
